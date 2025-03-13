@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name          = 'megalabs_sms'
-  spec.version       = MegalabsSms::VERSION
+  spec.version       = '0.1.1'
   spec.authors       = ['Vitalii Dementev']
   spec.email         = ['v@dementev.dev']
   spec.summary       = 'Ruby gem for sending SMS via the Megalabs API'
