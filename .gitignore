@@ -1,0 +1,4 @@
+*.gem
+.yardoc
+.yardtmp
+doc/
