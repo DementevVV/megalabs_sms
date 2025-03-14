@@ -54,7 +54,7 @@ module MegalabsSms
     # @param to [String] номер телефона получателя
     # @param message [String] текст сообщения
     #
-    # @return [String] статус отправки или текст ошибки
+    # @return [Boolean] true если SMS отправлено успешно, false в случае ошибки
     #
     def send_sms(from, to, message)
       return handle_stub_response if stub_enabled?
@@ -77,12 +77,16 @@ module MegalabsSms
     #
     # Обрабатывает эмуляцию ответов
     #
-    # @return [String] сообщение об успехе или ошибке эмуляции
+    # @return [Boolean] true если эмулируется успех, false если эмулируется ошибка
     #
     def handle_stub_response
-      return log_message('Stubbed error: SMS not sent') if @error_stub
-
-      log_message('Stubbed success: SMS would be sent') if @success_stub
+      if @error_stub
+        log_message('Stubbed error: SMS not sent')
+        false
+      elsif @success_stub
+        log_message('Stubbed success: SMS would be sent')
+        true
+      end
     end
 
     #
@@ -125,13 +129,13 @@ module MegalabsSms
     #
     # @param request [Net::HTTP::Post] объект HTTP-запроса
     #
-    # @return [String] тело ответа или сообщение об ошибке
+    # @return [Boolean] true если запрос выполнен успешно, false в случае ошибки
     #
     def send_request(request)
       uri = URI('https://a2p-api.megalabs.ru/sms/v1/sms')
-      response_body = perform_http_request(uri, request)
+      success = perform_http_request(uri, request)
       sleep(@sleep_time) if @sleep_time.positive?
-      response_body
+      success
     end
 
     #
@@ -140,7 +144,7 @@ module MegalabsSms
     # @param uri [URI] URI-адрес для запроса
     # @param request [Net::HTTP::Post] объект HTTP-запроса
     #
-    # @return [String] тело ответа или сообщение об ошибке
+    # @return [Boolean] true если запрос выполнен успешно, false в случае ошибки
     #
     def perform_http_request(uri, request)
       response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https') do |http|
@@ -150,10 +154,11 @@ module MegalabsSms
       if response.is_a?(Net::HTTPSuccess)
         process_http_response(response.body)
       else
-        log_message("Failed to send: #{response}")
+        log_message("Failed to send: #{response}") && false
       end
     rescue StandardError => e
       log_message("Exception occurred: #{e.message}")
+      false
     end
 
     #
@@ -162,17 +167,21 @@ module MegalabsSms
     #
     # @param raw_body [String] оригинальный ответ от HTTP-запроса
     #
-    # @return [String] либо оригинальное тело (если все хорошо), либо сообщение об ошибке
+    # @return [Boolean] true если сообщение отправлено успешно, false в случае ошибки
     #
     def process_http_response(raw_body)
       body = raw_body.dup.force_encoding('UTF-8')
       parsed = JSON.parse(body)
       result = parsed.dig('result', 'status')
-      return body if result&.fetch('code', nil)&.zero? && result&.fetch('description', '')&.downcase == 'ok'
-
-      log_message("Failed to send: #{body}")
+      success = result&.fetch('code', nil)&.zero? && result&.fetch('description', '')&.downcase == 'ok'
+      if success
+        log_message("Successfully sent: #{body}") && true
+      else
+        log_message("Failed to send: #{body}") && false
+      end
     rescue JSON::ParserError => e
       log_message("Failed to parse JSON: #{e.message}")
+      false
     end
   end
 end

@@ -2,7 +2,7 @@
 
 Gem::Specification.new do |spec|
   spec.name          = 'megalabs_sms'
-  spec.version       = '0.1.1'
+  spec.version       = '0.2.0'
   spec.authors       = ['Vitalii Dementev']
   spec.email         = ['v@dementev.dev']
   spec.summary       = 'Ruby gem for sending SMS via the Megalabs API'
@@ -18,7 +18,7 @@ Gem::Specification.new do |spec|
     'rubygems_mfa_required' => 'true'
   }
 
-  spec.license       = 'MIT'
+  spec.license = 'MIT'
   spec.required_ruby_version = '>= 2.7.0'
 
   spec.files = Dir[
