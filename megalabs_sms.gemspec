@@ -1,8 +1,10 @@
 # frozen_string_literal: true
 
+require_relative 'lib/megalabs_sms/version'
+
 Gem::Specification.new do |spec|
   spec.name          = 'megalabs_sms'
-  spec.version       = '0.2.0'
+  spec.version       = MegalabsSms::VERSION
   spec.authors       = ['Vitalii Dementev']
   spec.email         = ['v@dementev.dev']
   spec.summary       = 'Ruby gem for sending SMS via the Megalabs API'
@@ -26,13 +28,9 @@ Gem::Specification.new do |spec|
     'spec/**/*.rb',
     'README.md',
     'LICENSE',
-    'CHANGELOG.md',
-    '.yardopts'
+    'CHANGELOG.md'
   ]
   spec.require_paths = ['lib']
-
-  spec.add_dependency 'net-http', '~> 0.6.0'
-  spec.add_dependency 'ostruct', '~> 0.6.0'
 
   spec.add_development_dependency 'rspec'
   spec.add_development_dependency 'webmock'

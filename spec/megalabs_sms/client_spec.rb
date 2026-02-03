@@ -11,6 +11,7 @@ RSpec.describe MegalabsSms::Client do
   let(:from)         { 'TestSender' }
   let(:to)           { '+70001234567' }
   let(:message)      { 'Hello from RSpec!' }
+  let(:logger)       { instance_double(Logger, info: true, warn: true, error: true) }
 
   subject(:client) do
     described_class.new(
@@ -18,8 +19,44 @@ RSpec.describe MegalabsSms::Client do
       api_password,
       sleep_time: sleep_time,
       success_stub: success_stub,
-      error_stub: error_stub
+      error_stub: error_stub,
+      logger: logger
     )
+  end
+
+  describe 'validation' do
+    let(:success_stub) { false }
+    let(:error_stub)   { false }
+
+    it 'raises an error when api_user is missing' do
+      expect do
+        described_class.new(nil, api_password, logger: logger)
+      end.to raise_error(ArgumentError, 'api_user is required')
+    end
+
+    it 'raises an error when api_password is missing' do
+      expect do
+        described_class.new(api_user, ' ', logger: logger)
+      end.to raise_error(ArgumentError, 'api_password is required')
+    end
+
+    it 'raises an error when sleep_time is negative' do
+      expect do
+        described_class.new(api_user, api_password, sleep_time: -1, logger: logger)
+      end.to raise_error(ArgumentError, 'sleep_time must be >= 0')
+    end
+
+    it 'raises an error when message is blank' do
+      expect do
+        client.send_sms(from, to, ' ')
+      end.to raise_error(ArgumentError, 'message is required')
+    end
+
+    it 'raises an error when to has no digits' do
+      expect do
+        client.send_sms(from, 'abc', message)
+      end.to raise_error(ArgumentError, 'to must contain digits')
+    end
   end
 
   context 'with stub responses' do
@@ -28,10 +65,10 @@ RSpec.describe MegalabsSms::Client do
       let(:error_stub)   { false }
 
       it 'returns true indicating success' do
-        allow(client).to receive(:log_message).and_return(true)
+        allow(logger).to receive(:info).and_return(true)
         result = client.send_sms(from, to, message)
         expect(result).to eq(true)
-        expect(client).to have_received(:log_message).with('Stubbed success: SMS would be sent')
+        expect(logger).to have_received(:info).with('[MegalabsSms] Stubbed success: SMS would be sent')
       end
     end
 
@@ -40,10 +77,10 @@ RSpec.describe MegalabsSms::Client do
       let(:error_stub)   { true }
 
       it 'returns false indicating failure' do
-        allow(client).to receive(:log_message).and_return(false)
+        allow(logger).to receive(:warn).and_return(false)
         result = client.send_sms(from, to, message)
         expect(result).to eq(false)
-        expect(client).to have_received(:log_message).with('Stubbed error: SMS not sent')
+        expect(logger).to have_received(:warn).with('[MegalabsSms] Stubbed error: SMS not sent')
       end
     end
   end
@@ -59,7 +96,7 @@ RSpec.describe MegalabsSms::Client do
       stub_request(:post, 'https://a2p-api.megalabs.ru/sms/v1/sms')
         .to_return(status: 200, body: valid_response, headers: { 'Content-Type': 'application/json' })
 
-      allow(client).to receive(:log_message).and_return(true)
+      allow(logger).to receive(:info).and_return(true)
 
       result = client.send_sms(from, to, message)
       expect(result).to eq(true)
@@ -71,7 +108,7 @@ RSpec.describe MegalabsSms::Client do
           # rubocop:enable Style/NumericLiterals
           message: message
         }.to_json)
-      expect(client).to have_received(:log_message).with("Successfully sent: #{valid_response}")
+      expect(logger).to have_received(:info).with("[MegalabsSms] Successfully sent: #{valid_response}")
     end
 
     it 'returns false when the API returns an error' do
@@ -80,11 +117,28 @@ RSpec.describe MegalabsSms::Client do
       stub_request(:post, 'https://a2p-api.megalabs.ru/sms/v1/sms')
         .to_return(status: 200, body: error_response, headers: { 'Content-Type': 'application/json' })
 
-      allow(client).to receive(:log_message).and_return(false)
+      allow(logger).to receive(:warn).and_return(false)
 
       result = client.send_sms(from, to, message)
       expect(result).to eq(false)
-      expect(client).to have_received(:log_message).with("Failed to send: #{error_response}")
+      expect(logger).to have_received(:warn).with("[MegalabsSms] Failed to send: #{error_response}")
+    end
+  end
+
+  describe 'keyword arguments compatibility' do
+    let(:success_stub) { true }
+    let(:error_stub)   { false }
+
+    it 'accepts keyword arguments' do
+      allow(logger).to receive(:info).and_return(true)
+      result = client.send_sms(from: from, to: to, message: message)
+      expect(result).to eq(true)
+    end
+
+    it 'raises when mixing positional and keyword arguments' do
+      expect do
+        client.send_sms(from, to, message, from: from)
+      end.to raise_error(ArgumentError, 'use either keyword arguments or positional arguments, not both')
     end
   end
 end

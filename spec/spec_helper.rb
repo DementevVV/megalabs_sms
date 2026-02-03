@@ -2,6 +2,7 @@
 
 require 'rspec'
 require 'webmock/rspec'
+require 'logger'
 
 require_relative '../lib/megalabs_sms'
 

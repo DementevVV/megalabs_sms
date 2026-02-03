@@ -1,8 +1,11 @@
 # frozen_string_literal: true
 
-require 'net/http'
 require 'json'
+require 'logger'
+require 'net/http'
 require_relative 'megalabs_sms/version'
+require_relative 'megalabs_sms/http_transport'
+require_relative 'megalabs_sms/client_config'
 
 #
 # Главный модуль для взаимодействия с API Megalabs, включая отправку SMS.
@@ -10,30 +13,30 @@ require_relative 'megalabs_sms/version'
 module MegalabsSms
   # Класс для взаимодействия с API Megalabs для отправки SMS
   class Client
+    DEFAULT_ENDPOINT = URI('https://a2p-api.megalabs.ru/sms/v1/sms')
+    DEFAULT_OPEN_TIMEOUT = ClientConfig::DEFAULTS[:open_timeout]
+    DEFAULT_READ_TIMEOUT = ClientConfig::DEFAULTS[:read_timeout]
+
     #
     # Конструктор, инициализирующий параметры клиента:
     #
     # @param api_user [String] логин для Basic Auth
     # @param api_password [String] пароль для Basic Auth
-    # @param sleep_time [Float] время задержки в секундах (по умолчанию 0)
-    # @param success_stub [Boolean] эмулировать успешную отправку?
-    # @param error_stub [Boolean] эмулировать ошибку отправки?
+    # @param options [Hash] доп. настройки клиента
+    # @option options [Float] :sleep_time время задержки в секундах (по умолчанию 0)
+    # @option options [Boolean] :success_stub эмулировать успешную отправку?
+    # @option options [Boolean] :error_stub эмулировать ошибку отправки?
+    # @option options [Logger, nil] :logger логгер для вывода сообщений (по умолчанию nil)
+    # @option options [Numeric] :open_timeout таймаут на открытие соединения
+    # @option options [Numeric] :read_timeout таймаут на чтение ответа
     #
     # @raise [ArgumentError] если api_user или api_password отсутствуют или пусты
     #
-    def initialize(api_user,
-                   api_password,
-                   sleep_time: 0,
-                   success_stub: false,
-                   error_stub: false)
-      raise ArgumentError, 'api_user is required' if api_user.nil? || api_user.strip.empty?
-      raise ArgumentError, 'api_password is required' if api_password.nil? || api_password.strip.empty?
-
-      @api_user = api_user
-      @api_password = api_password
-      @sleep_time = sleep_time
-      @success_stub = success_stub
-      @error_stub = error_stub
+    def initialize(api_user, api_password, **options)
+      ClientConfig.validate_credentials!(api_user, api_password)
+      options = ClientConfig.normalize(options)
+      ClientConfig.validate_timeouts!(options)
+      ClientConfig.apply!(self, api_user, api_password, options)
     end
 
     #
@@ -53,10 +56,20 @@ module MegalabsSms
     # @param from [String] имя/номер отправителя
     # @param to [String] номер телефона получателя
     # @param message [String] текст сообщения
+    # @param kwargs [Hash] альтернативные именованные аргументы
     #
     # @return [Boolean] true если SMS отправлено успешно, false в случае ошибки
     #
-    def send_sms(from, to, message)
+    def send_sms(from = nil, to = nil, message = nil, **kwargs)
+      if kwargs.any?
+        raise ArgumentError, 'use either keyword arguments or positional arguments, not both' if from || to || message
+
+        from = kwargs.fetch(:from)
+        to = kwargs.fetch(:to)
+        message = kwargs.fetch(:message)
+      end
+
+      validate_message_args!(from, to, message)
       return handle_stub_response if stub_enabled?
 
       request = build_request(from, to, message)
@@ -81,10 +94,10 @@ module MegalabsSms
     #
     def handle_stub_response
       if @error_stub
-        log_message('Stubbed error: SMS not sent')
+        log(:warn, 'Stubbed error: SMS not sent')
         false
       elsif @success_stub
-        log_message('Stubbed success: SMS would be sent')
+        log(:info, 'Stubbed success: SMS would be sent')
         true
       end
     end
@@ -99,8 +112,7 @@ module MegalabsSms
     # @return [Net::HTTP::Post] объект HTTP-запроса
     #
     def build_request(from, to, message)
-      uri = URI('https://a2p-api.megalabs.ru/sms/v1/sms')
-      request = Net::HTTP::Post.new(uri)
+      request = Net::HTTP::Post.new(DEFAULT_ENDPOINT)
       request.basic_auth(@api_user, @api_password)
       request.content_type = 'application/json'
       request.body = build_request_body(from, to, message)
@@ -108,18 +120,21 @@ module MegalabsSms
     end
 
     #
-    # Создает HTTP-запрос для отправки SMS
+    # Создает тело HTTP-запроса для отправки SMS
     #
     # @param from [String] имя/номер отправителя
-    # @param to [String] <description>
-    # @param message [String] <description>
+    # @param to [String] номер телефона получателя
+    # @param message [String] текст сообщения
     #
-    # @return [Net::HTTP::Post] объект HTTP-запроса
+    # @return [String] JSON-тело запроса
     #
     def build_request_body(from, to, message)
+      digits = to.to_s.gsub(/\D/, '')
+      raise ArgumentError, 'to must contain digits' if digits.empty?
+
       {
         from: from,
-        to: to.gsub(/\D/, '').to_i,
+        to: digits.to_i,
         message: message
       }.to_json
     end
@@ -132,56 +147,50 @@ module MegalabsSms
     # @return [Boolean] true если запрос выполнен успешно, false в случае ошибки
     #
     def send_request(request)
-      uri = URI('https://a2p-api.megalabs.ru/sms/v1/sms')
-      success = perform_http_request(uri, request)
+      success = http_transport.send_request(DEFAULT_ENDPOINT, request)
       sleep(@sleep_time) if @sleep_time.positive?
       success
     end
 
     #
-    # Выполняет HTTP-запрос
+    # Проверяет входные параметры отправки
     #
-    # @param uri [URI] URI-адрес для запроса
-    # @param request [Net::HTTP::Post] объект HTTP-запроса
+    # @param from [String] имя/номер отправителя
+    # @param to [String] номер телефона получателя
+    # @param message [String] текст сообщения
     #
-    # @return [Boolean] true если запрос выполнен успешно, false в случае ошибки
+    # @raise [ArgumentError] если параметры отсутствуют или пусты
     #
-    def perform_http_request(uri, request)
-      response = Net::HTTP.start(uri.hostname, uri.port, use_ssl: uri.scheme == 'https') do |http|
-        http.request(request)
-      end
-
-      if response.is_a?(Net::HTTPSuccess)
-        process_http_response(response.body)
-      else
-        log_message("Failed to send: #{response}") && false
-      end
-    rescue StandardError => e
-      log_message("Exception occurred: #{e.message}")
-      false
+    def validate_message_args!(from, to, message)
+      raise ArgumentError, 'from is required' if from.nil? || from.to_s.strip.empty?
+      raise ArgumentError, 'to is required' if to.nil? || to.to_s.strip.empty?
+      raise ArgumentError, 'message is required' if message.nil? || message.to_s.strip.empty?
     end
 
     #
-    # Обрабатывает тело ответа HTTP и возвращает корректное сообщение.
-    # Если статус ответа не соответствует ожидаемому, возвращает сообщение об ошибке.
+    # Логирует сообщение, если задан логгер
     #
-    # @param raw_body [String] оригинальный ответ от HTTP-запроса
+    # @param level [Symbol] уровень логирования
+    # @param message [String] сообщение
     #
-    # @return [Boolean] true если сообщение отправлено успешно, false в случае ошибки
+    def log(level, message)
+      return unless @logger
+
+      @logger.public_send(level, log_message(message))
+    end
+
     #
-    def process_http_response(raw_body)
-      body = raw_body.dup.force_encoding('UTF-8')
-      parsed = JSON.parse(body)
-      result = parsed.dig('result', 'status')
-      success = result&.fetch('code', nil)&.zero? && result&.fetch('description', '')&.downcase == 'ok'
-      if success
-        log_message("Successfully sent: #{body}") && true
-      else
-        log_message("Failed to send: #{body}") && false
-      end
-    rescue JSON::ParserError => e
-      log_message("Failed to parse JSON: #{e.message}")
-      false
+    # Возвращает транспорт для HTTP-запросов
+    #
+    # @return [MegalabsSms::HttpTransport]
+    #
+    def http_transport
+      @http_transport ||= HttpTransport.new(
+        logger: @logger,
+        log_prefix: method(:log_message),
+        open_timeout: @open_timeout,
+        read_timeout: @read_timeout
+      )
     end
   end
 end
